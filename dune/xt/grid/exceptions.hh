@@ -35,6 +35,14 @@ class functor_error : public Dune::InvalidStateException
 {
 };
 
+class not_bound_to_an_element_yet : public Dune::InvalidStateException
+{
+};
+
+class functor_error : public Dune::InvalidStateException
+{
+};
+
 
 } // namespace Exceptions
 } // namespace Grid
