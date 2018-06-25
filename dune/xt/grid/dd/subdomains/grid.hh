@@ -107,7 +107,7 @@ public:
       error = true;
     }
     DUNE_THROW_IF(error, InvalidStateException, msg.str());
-  } // SubdomainGrid()
+  }; // SubdomainGrid()
 
   SubdomainGrid(
       const std::shared_ptr<const GridType> grd,

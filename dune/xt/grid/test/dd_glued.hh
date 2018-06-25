@@ -10,7 +10,7 @@
 
 #ifndef DUNE_XT_GRID_TEST_DD_GLUED_HH
 #define DUNE_XT_GRID_TEST_DD_GLUED_HH
-#if HAVE_DUNE_GRID_GLUE
+//#if HAVE_DUNE_GRID_GLUE
 
 #include <map>
 #include <set>

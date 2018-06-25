@@ -54,7 +54,7 @@ class intersection_orientation_is_broken : public Dune::InvalidStateException
 } // namespace Exceptions
 
 
-#if HAVE_DUNE_GRID_GLUE
+//#if HAVE_DUNE_GRID_GLUE
 
 
 template <typename P0, typename P1>
@@ -216,6 +216,7 @@ public:
     , macro_leaf_view_(macro_grid_.leaf_view())
     , macro_leaf_view_size_(macro_leaf_view_.indexSet().size(0))
     , local_grids_(macro_leaf_view_.indexSet().size(0), nullptr)
+    , local_oversampling_grids_(local_grids_)
     , glues_(macro_leaf_view_.indexSet().size(0))
   {
     setup_local_grids();
@@ -371,6 +372,34 @@ public:
     assert_macro_grid_state();
     assert(macro_entity_index < macro_leaf_view_size_);
     return *(local_grids_.at(macro_entity_index));
+  }
+
+  const LocalGridProviderType& local_oversampling_grid(const MacroEntityType& macro_entity) const
+  {
+    assert_macro_grid_state();
+    assert(macro_leaf_view_.indexSet().contains(macro_entity));
+    return local_oversampling_grid(macro_leaf_view_.indexSet().index(macro_entity));
+  }
+
+  LocalGridProviderType& local_oversampling_grid(const MacroEntityType& macro_entity)
+  {
+    assert_macro_grid_state();
+    assert(macro_leaf_view_.indexSet().contains(macro_entity));
+    return local_oversampling_grid(macro_leaf_view_.indexSet().index(macro_entity));
+  }
+
+  LocalGridProviderType& local_oversampling_grid(const size_t macro_entity_index)
+  {
+    assert_macro_grid_state();
+    assert(macro_entity_index < macro_leaf_view_size_);
+    return *(local_oversampling_grids_.at(macro_entity_index));
+  }
+
+  const LocalGridProviderType& local_oversampling_grid(const size_t macro_entity_index) const
+  {
+    assert_macro_grid_state();
+    assert(macro_entity_index < macro_leaf_view_size_);
+    return *(local_oversampling_grids_.at(macro_entity_index));
   }
 
   /**
@@ -709,7 +738,124 @@ public:
     vtk_writer.write(filename, VTK::appendedraw);
   } // ... visualize(...)
 
+  void setup_oversampling_grids(size_t macro_elements = 0, size_t micro_elements = 0)
+  {
+    for (size_t macro_index = 0; macro_index < local_grids_.size(); ++macro_index)
+      setup_oversampling_grid(macro_index, macro_elements, micro_elements);
+  }
+
+  void setup_oversampling_grid(size_t index_of_local_grid, size_t macro_elements = 0, size_t micro_elements = 0)
+  {
+    // initialize coords
+    const int corners = elements(local_grids_[index_of_local_grid]->leaf_view()).begin().geometry().corners();
+    FieldVector<FieldVector<double, dimDomain>, 4> coords;
+    for (size_t ii = 0; ii < corners; ++ii) {
+      coords[ii] = macro_element(index_of_local_grid)->template subEntity<dimDomain>(ii).geometry().center();
+    }
+    int micro_entities_per_dimension = pow(local_grids_[index_of_local_grid]->grid().size(0), (1. / dimDomain));
+    auto volume_per_micro_entity =
+        pow(elements(local_grids_[index_of_local_grid]->leaf_view()).begin().geometry().volume(), 1. / dimDomain);
+    // works only for yasp 2d
+    coords[0] -= macro_elements * volume_per_micro_entity * micro_entities_per_dimension;
+    coords[1][0] += macro_elements * volume_per_micro_entity * micro_entities_per_dimension;
+    coords[1][1] -= macro_elements * volume_per_micro_entity * micro_entities_per_dimension;
+    coords[2][0] -= macro_elements * volume_per_micro_entity * micro_entities_per_dimension;
+    coords[2][1] += macro_elements * volume_per_micro_entity * micro_entities_per_dimension;
+    coords[3] += macro_elements * volume_per_micro_entity * micro_entities_per_dimension;
+
+    // works only for yasp 2d
+    coords[0] -= micro_elements * volume_per_micro_entity;
+    coords[1][0] += micro_elements * volume_per_micro_entity;
+    coords[1][1] -= micro_elements * volume_per_micro_entity;
+    coords[2][0] -= micro_elements * volume_per_micro_entity;
+    coords[2][1] += micro_elements * volume_per_micro_entity;
+    coords[3] += micro_elements * volume_per_micro_entity;
+
+    local_oversampling_grids_[index_of_local_grid] =
+        oversample_local_grid(coords, local_grids_[index_of_local_grid], volume_per_micro_entity);
+  }
+
+
 private:
+  auto macro_element(size_t i)
+  {
+    auto iterator = elements(macro_leaf_view_).begin();
+    for (size_t ii = 0; ii < i; ++ii)
+      ++iterator;
+    return iterator;
+  }
+
+  std::shared_ptr<LocalGridProviderType>
+  oversample_local_grid_correct_refinement(FieldVector<FieldVector<double, dimDomain>, 4>& coords,
+                                           int& entities_per_dimension,
+                                           double& volume_per_micro_entity)
+  {
+    FieldVector<ctype, dimDomain> lower_left(std::numeric_limits<ctype>::max());
+    FieldVector<ctype, dimDomain> upper_right(std::numeric_limits<ctype>::min());
+    for (size_t local_vertex_id = 0; local_vertex_id < coords.size(); ++local_vertex_id) {
+      for (size_t dd = 0; dd < dimDomain; ++dd) {
+        lower_left[dd] = std::min(lower_left[dd], coords[local_vertex_id][dd]);
+        upper_right[dd] = std::max(upper_right[dd], coords[local_vertex_id][dd]);
+      }
+    }
+    std::array<unsigned int, dimDomain> num_elements;
+    std::fill(num_elements.begin(), num_elements.end(), entities_per_dimension);
+    //    std::cout << num_elements << std::endl;
+
+    // boundarys
+    double min_1 = std::numeric_limits<ctype>::max();
+    double max_1 = std::numeric_limits<ctype>::min();
+    double min_2 = std::numeric_limits<ctype>::max();
+    double max_2 = std::numeric_limits<ctype>::min();
+
+    for (auto&& element : elements(macro_leaf_view_)) {
+      min_1 = std::min(element.template subEntity<dimDomain>(0).geometry().center()[0], min_1);
+      max_1 = std::max(element.template subEntity<dimDomain>(1).geometry().center()[0], max_1);
+      min_2 = std::min(element.template subEntity<dimDomain>(0).geometry().center()[1], min_2);
+      max_2 = std::max(element.template subEntity<dimDomain>(2).geometry().center()[1], max_2);
+    }
+
+    if (lower_left[0] < min_1) {
+      num_elements[0] -= round(abs(lower_left[0] - min_1) / volume_per_micro_entity);
+      lower_left[0] = min_1;
+    }
+
+    if (lower_left[1] < min_2) {
+      num_elements[1] -= round(abs(lower_left[1] - min_2) / volume_per_micro_entity);
+      lower_left[1] = min_2;
+    }
+
+    if (upper_right[0] > max_1) {
+      num_elements[0] -= round(abs(upper_right[0] - max_1) / volume_per_micro_entity);
+      upper_right[0] = max_1;
+    }
+
+    if (upper_right[1] > max_2) {
+      num_elements[1] -= round(abs(upper_right[1] - max_2) / volume_per_micro_entity);
+      upper_right[1] = max_2;
+    }
+
+    //   std::cout << num_elements << std::endl;
+
+    return std::make_shared<XT::Grid::GridProvider<LocalGridType>>(
+        XT::Grid::make_cube_grid<LocalGridType>(lower_left, upper_right, num_elements));
+  }
+
+  std::shared_ptr<LocalGridProviderType> oversample_local_grid(FieldVector<FieldVector<double, dimDomain>, 4> coords,
+                                                               std::shared_ptr<LocalGridProviderType>& local_grid,
+                                                               double& volume_per_micro_entity)
+  {
+    int entities_per_dimension = pow(local_grid->grid().size(0), (1. / dimDomain));
+    //    std::cout << entities_per_dimension << std::endl;
+    //    std::cout << volume_per_micro_entity << std::endl;
+    double oversampling_size = abs(coords[0][0] - coords[1][0]);
+    int number_of_micro_elements_in_oversampling = round(oversampling_size / volume_per_micro_entity);
+    //    std::cout << number_of_micro_elements_in_oversampling << std::endl;
+    std::shared_ptr<LocalGridProviderType> new_local_grid = oversample_local_grid_correct_refinement(
+        coords, number_of_micro_elements_in_oversampling, volume_per_micro_entity);
+    return new_local_grid;
+  }
+
   template <class MacroEntityType>
   static std::shared_ptr<LocalGridProviderType> create_grid_of_simplex(const MacroEntityType& macro_entity)
   {
@@ -1017,6 +1163,8 @@ private:
   MacroGridViewType macro_leaf_view_;
   const size_t macro_leaf_view_size_;
   std::vector<std::shared_ptr<LocalGridProviderType>> local_grids_;
+  std::vector<std::vector<FieldVector<double, dimDomain>>> local_grid_corners;
+  std::vector<std::shared_ptr<LocalGridProviderType>> local_oversampling_grids_;
   std::vector<std::map<size_t, std::map<int, std::map<int, std::shared_ptr<GlueType>>>>> glues_;
   std::map<size_t, std::map<int, std::vector<std::pair<MicroEntityType, std::vector<int>>>>>
       macro_entity_to_local_level_to_boundary_entity_ptrs_with_local_intersections_;
@@ -1201,4 +1349,4 @@ class Glued
 } // namespace XT
 } // namespace Dune
 
-#endif // DUNE_XT_GRID_DD_GLUED_HH
+// #endif // DUNE_XT_GRID_DD_GLUED_HH
