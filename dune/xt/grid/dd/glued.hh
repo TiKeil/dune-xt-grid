@@ -33,11 +33,13 @@
 #include <dune/xt/common/ranges.hh>
 #include <dune/xt/common/timedlogging.hh>
 #include <dune/xt/grid/intersection.hh>
+#include <dune/xt/grid/grids.hh>
 #include <dune/xt/grid/layers.hh>
 #include <dune/xt/grid/gridprovider/provider.hh>
 #include <dune/xt/grid/gridprovider/cube.hh>
 #include <dune/xt/grid/search.hh>
 #include <dune/xt/grid/type_traits.hh>
+
 
 namespace Dune {
 namespace XT {
@@ -1125,7 +1127,7 @@ private:
         const auto& global_entity_ptr_unique_ptr = global_entity_ptr_unique_ptrs.at(0);
         assert(global_entity_ptr_unique_ptr);
         const auto& global_entity_ptr = *global_entity_ptr_unique_ptr;
-        const auto& global_entity = *global_entity_ptr;
+        const auto& global_entity = global_entity_ptr;
         const size_t global_entity_index = global_view.indexSet().index(global_entity);
         // store information
         local_to_global_inds[subd][local_entity_index] = global_entity_index;
